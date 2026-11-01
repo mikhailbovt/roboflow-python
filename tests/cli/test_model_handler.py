@@ -3,6 +3,7 @@
 import io
 import json
 import sys
+import tempfile
 import types
 import unittest
 from unittest.mock import MagicMock, patch
@@ -116,12 +117,63 @@ class TestModelUpload(unittest.TestCase):
         return types.SimpleNamespace(**defaults)
 
     @patch("roboflow.Roboflow")
+    def test_packaging_mismatch_does_not_prompt_in_cli(self, mock_rf_cls):
+        from roboflow.cli.handlers.model import _upload_model
+        from roboflow.util.model_processor import SizeMismatchError
+        from tests.helpers import get_version
+        from tests.test_workspace import _make_workspace
+
+        workspace = _make_workspace()
+        workspace.project_list = [{"id": "test-ws/proj1", "type": "object-detection"}]
+        mock_rf_cls.return_value.workspace.return_value = workspace
+        with tempfile.TemporaryDirectory() as directory, patch.object(workspace, "project") as project:
+            project.return_value.version.return_value = get_version()
+            for version_number in (1, None):
+                with self.subTest(version_number=version_number):
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    error = SizeMismatchError("Model size does not match", requested="yolov8m", detected="yolov8n")
+                    with (
+                        patch("roboflow.util.model_processor._process_model", side_effect=error),
+                        patch("builtins.input", side_effect=AssertionError("Unexpected prompt")) as prompt,
+                        patch("sys.stdout", stdout),
+                        patch("sys.stderr", stderr),
+                        self.assertRaises(SystemExit) as raised,
+                    ):
+                        _upload_model(self._make_args(json=True, model_path=directory, version_number=version_number))
+                    self.assertEqual(raised.exception.code, 1)
+                    self.assertEqual(stdout.getvalue(), "")
+                    self.assertIn("Model size does not match", json.loads(stderr.getvalue())["error"]["message"])
+                    prompt.assert_not_called()
+
+    @patch("roboflow.Roboflow")
+    def test_failed_upload_has_no_success_output(self, mock_rf_cls):
+        from roboflow.cli.handlers.model import _upload_model
+
+        workspace = mock_rf_cls.return_value.workspace.return_value
+        for version_number in (1, None):
+            with self.subTest(version_number=version_number):
+                deploy = (
+                    workspace.project.return_value.version.return_value.deploy
+                    if version_number
+                    else workspace.deploy_model
+                )
+                deploy.side_effect = RuntimeError("Upload rejected")
+                stdout, stderr = io.StringIO(), io.StringIO()
+                with patch("sys.stdout", stdout), patch("sys.stderr", stderr):
+                    with self.assertRaises(SystemExit) as raised:
+                        _upload_model(self._make_args(json=True, version_number=version_number))
+                self.assertEqual(raised.exception.code, 1)
+                self.assertEqual(stdout.getvalue(), "")
+                self.assertIn("Upload rejected", json.loads(stderr.getvalue())["error"]["message"])
+
+    @patch("roboflow.Roboflow")
     def test_upload_single_version(self, mock_rf_cls: MagicMock) -> None:
         from roboflow.cli.handlers.model import _upload_model
 
         mock_version = MagicMock()
         mock_project = MagicMock()
         mock_project.version.return_value = mock_version
+        mock_version.deploy.side_effect = lambda *args, **kwargs: print("SDK deployment output")
         mock_workspace = MagicMock()
         mock_workspace.project.return_value = mock_project
         mock_rf = MagicMock()
@@ -139,7 +191,7 @@ class TestModelUpload(unittest.TestCase):
 
         result = json.loads(buf.getvalue())
         self.assertEqual(result["status"], "uploaded")
-        mock_version.deploy.assert_called_once_with("yolov8", "/path/to/model", "weights/best.pt")
+        mock_version.deploy.assert_called_once_with("yolov8", "/path/to/model", "weights/best.pt", interactive=False)
 
     @patch("roboflow.Roboflow")
     def test_upload_multi_project(self, mock_rf_cls: MagicMock) -> None:

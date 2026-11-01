@@ -7,8 +7,8 @@ for failures so that ``--json`` mode works uniformly.
 from __future__ import annotations
 
 import contextlib
-import io
 import json
+import os
 import sys
 from typing import Any, Iterator, Optional
 
@@ -279,5 +279,5 @@ def suppress_sdk_output(args: Any = None) -> Iterator[None]:
     are not useful CLI output in any mode.  The CLI controls its own
     output via ``output()`` and ``output_error()``.
     """
-    with contextlib.redirect_stdout(io.StringIO()):
+    with open(os.devnull, "w", encoding="utf-8") as sink, contextlib.redirect_stdout(sink):
         yield

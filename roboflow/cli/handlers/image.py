@@ -356,8 +356,6 @@ def _handle_upload_single(args, api_key: str, path: str) -> None:  # noqa: ANN00
 
 
 def _handle_upload_directory(args, api_key: str, path: str) -> None:  # noqa: ANN001
-    import os
-
     import roboflow
     from roboflow.cli._output import output, output_error, suppress_sdk_output
 
@@ -376,25 +374,30 @@ def _handle_upload_directory(args, api_key: str, path: str) -> None:  # noqa: AN
     wait = not getattr(args, "no_wait", False)
 
     try:
-        result = workspace.upload_dataset(
-            dataset_path=path,
-            project_name=args.project,
-            num_workers=args.concurrency,
-            batch_name=getattr(args, "batch", None),
-            num_retries=retries,
-            is_prediction=getattr(args, "is_prediction", False),
-            use_zip_upload=getattr(args, "zip_upload", False),
-            annotation_overwrite=getattr(args, "annotation_overwrite", None),
-            split=getattr(args, "split", None),
-            tags=tags,
-            wait=wait,
-        )
+        with suppress_sdk_output():
+            result = workspace.upload_dataset(
+                dataset_path=path,
+                project_name=args.project,
+                num_workers=args.concurrency,
+                batch_name=getattr(args, "batch", None),
+                num_retries=retries,
+                is_prediction=getattr(args, "is_prediction", False),
+                use_zip_upload=getattr(args, "zip_upload", False),
+                annotation_overwrite=getattr(args, "annotation_overwrite", None),
+                split=getattr(args, "split", None),
+                tags=tags,
+                wait=wait,
+                return_summary=True,
+            )
     except Exception as exc:
-        output_error(args, str(exc))
+        output_error(args, str(exc), hint="Check the failed files and retry the upload.")
         return
 
-    if isinstance(result, dict):
+    if "uploaded" not in result:
         status = result.get("status", "unknown")
+        if status not in {"completed", "pending"}:
+            output_error(args, f"Zip upload {status}: {result}", hint="Check the upload task and retry.")
+            return
         data = {
             "status": status,
             "task_id": result.get("task_id") or result.get("taskId"),
@@ -405,15 +408,8 @@ def _handle_upload_directory(args, api_key: str, path: str) -> None:  # noqa: AN
         output(args, data, text=f"Imported {path} to {args.project} (zip upload, status={status})")
         return
 
-    # Per-image fallback — count files via image extensions
-    count = 0
-    image_exts = {".jpg", ".jpeg", ".png", ".bmp", ".gif", ".tiff", ".webp"}
-    for root, _dirs, files in os.walk(path):
-        for f in files:
-            if os.path.splitext(f)[1].lower() in image_exts:
-                count += 1
-
-    data = {"status": "imported", "path": path, "count": count}
+    count = result["uploaded"] + result["duplicates"]
+    data = {"status": "imported", "path": path, "count": count, **result}
     output(args, data, text=f"Imported {count} images from {path} to {args.project}")
 
 

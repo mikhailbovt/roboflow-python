@@ -311,42 +311,32 @@ def _get_model(args):  # noqa: ANN001
 
 def _upload_model(args):  # noqa: ANN001
     import roboflow
-    from roboflow.cli._output import output, output_error
+    from roboflow.cli._output import output, output_error, suppress_sdk_output
 
-    api_key = args.api_key or None
-    rf = roboflow.Roboflow(api_key=api_key)
-    workspace = rf.workspace(args.workspace)
+    if not args.project:
+        output_error(args, "At least one project is required.", hint="Use -p/--project.")
+        return
 
-    if args.version_number is not None:
-        # Deploy to a specific version
-        project_id = args.project[0] if isinstance(args.project, list) else args.project
-        if not project_id:
-            output_error(args, "Project is required for model upload.", hint="Use -p/--project.")
-            return
-
-        try:
-            project = workspace.project(project_id)
-            version = project.version(args.version_number)
-            version.deploy(str(args.model_type), str(args.model_path), str(args.filename))
-        except Exception as exc:
-            output_error(args, str(exc))
-            return
-    else:
-        # Deploy to multiple projects
-        if not args.project:
-            output_error(args, "At least one project is required.", hint="Use -p/--project.")
-            return
-
-        try:
-            workspace.deploy_model(
-                model_type=str(args.model_type),
-                model_path=str(args.model_path),
-                project_ids=args.project,
-                model_name=str(args.model_name) if args.model_name else "",
-                filename=str(args.filename),
-            )
-        except Exception as exc:
-            output_error(args, str(exc))
-            return
+    try:
+        with suppress_sdk_output():
+            rf = roboflow.Roboflow(api_key=args.api_key or None)
+            workspace = rf.workspace(args.workspace)
+            if args.version_number is not None:
+                project_id = args.project[0] if isinstance(args.project, list) else args.project
+                project = workspace.project(project_id)
+                version = project.version(args.version_number)
+                version.deploy(str(args.model_type), str(args.model_path), str(args.filename), interactive=False)
+            else:
+                workspace.deploy_model(
+                    model_type=str(args.model_type),
+                    model_path=str(args.model_path),
+                    project_ids=args.project,
+                    model_name=str(args.model_name) if args.model_name else "",
+                    filename=str(args.filename),
+                    interactive=False,
+                )
+    except Exception as exc:
+        output_error(args, str(exc), hint="Check the model files and project permissions, then retry.")
+        return
 
     output(args, {"status": "uploaded"}, text="Model uploaded successfully.")
